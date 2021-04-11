@@ -11,24 +11,39 @@ type Config struct {
     Limit    int
     Next     func(c *fiber.Ctx) bool
     Response func(c *fiber.Ctx) error
+    Local    bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 var Response = func(c *fiber.Ctx) error {
     return c.Status(414).JSON(fiber.Map{
-        "status":  fiber.StatusRequestURITooLong,
-        "message": fmt.Sprintf("%s:%d byte > %d byte", 
+        "status": fiber.StatusRequestURITooLong,
+        "message": fmt.Sprintf("%s:%d byte > %d byte",
             http.StatusText(414),
             c.Locals("urilen"),
             c.Locals("maxurilen"),
         ),
     })
 }
- 
-var Next = func(c *fiber.Ctx) bool {return false}
 
 var ConfigDefault = Config{
-    Limit: 8 * 1024,
-    Next: Next,
+    Limit:    8 * 1024,
+    Next:     Next,
     Response: Response,
 }
 
@@ -44,16 +59,20 @@ func configDefault(config ...Config) Config {
     // Set default values
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
-    }
+    }    
     
+    if cfg.Local {
+        cfg.Next = NextIfLocal
+    }
+
     if cfg.Limit == 0 {
         cfg.Limit = ConfigDefault.Limit
     }
-    
+
     if cfg.Response == nil {
         cfg.Response = ConfigDefault.Response
     }
-    
+
     return cfg
 }
 

@@ -3,22 +3,36 @@ package switcher
 import (
     //"fmt"
     //"net/http"
-    
+
     "github.com/gofiber/fiber/v2"
 )
 
 type Config struct {
-    Skip     bool
     Next     func(c *fiber.Ctx) bool
     Response func(c *fiber.Ctx) error
+    Local    bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 var ResponseAtOnceConnClose = func(c *fiber.Ctx) error {
-    return c.Context().Conn().Close()
+    // Conn() return net.Conn
+    return c.Context().Conn().Close()         
 }
-
-
-var Next = func(c *fiber.Ctx) bool {return c.IP() == "127.0.0.1"}
 
 var ConfigDefault = Config{
     Next:     Next,
@@ -37,6 +51,10 @@ func configDefault(config ...Config) Config {
     // Set default values
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
     
     if cfg.Response == nil {
@@ -52,7 +70,6 @@ func New(config ...Config) fiber.Handler {
     // Return new handler
     return func(c *fiber.Ctx) error {
         // Don't execute middleware if Next returns true
-        if cfg.Skip {return c.Next()}
         if cfg.Next != nil && cfg.Next(c) {
             return c.Next()
         }

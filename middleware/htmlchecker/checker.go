@@ -2,43 +2,57 @@ package htmlchecker
 
 import (
     "fmt"
-    "strings"
-    "github.com/gofiber/fiber/v2"
     "github.com/gabriel-vasile/mimetype"
+    "github.com/gofiber/fiber/v2"
+    "strings"
 )
 
 type Config struct {
-    Targets  map[string]func(p string) bool
-    Next     func(c *fiber.Ctx) bool
-    Response func(c *fiber.Ctx) error
+    Targets   map[string]func(p string) bool
+    Next      func(c *fiber.Ctx) bool
+    Response  func(c *fiber.Ctx) error
     ReadLimit int
+    Local     bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 var Response = func(c *fiber.Ctx) error {
     return c.Status(400).JSON(fiber.Map{
-        "status": fiber.StatusBadRequest,
+        "status":  fiber.StatusBadRequest,
         "message": fmt.Sprintf("%s is not html", c.Locals("target")),
-        })
+    })
 }
 
-func Next(c *fiber.Ctx) bool { return false }
-
-func IsHTML2(p string) bool { 
+func IsHTML2(p string) bool {
     mime := mimetype.Detect([]byte(p))
     t := strings.TrimSpace(strings.Split(mime.String(), ";")[0])
-    return  t == "text/html"
-} 
+    return t == "text/html"
+}
 
-func IsHTML(p string) bool { 
+func IsHTML(p string) bool {
     mime := mimetype.Detect([]byte(p))
     return mime.Is("text/html")
-} 
-
+}
 
 var ConfigDefault = Config{
-    Targets:  make(map[string]func(p string) bool),
-    Next:     Next,
-    Response: Response,
+    Targets:   make(map[string]func(p string) bool),
+    Next:      Next,
+    Response:  Response,
     ReadLimit: 1024,
 }
 
@@ -55,11 +69,15 @@ func configDefault(config ...Config) Config {
     if cfg.ReadLimit == 0 {
         cfg.ReadLimit = ConfigDefault.ReadLimit
     }
-    
+
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
-
+    
     if cfg.Targets == nil {
         cfg.Targets = ConfigDefault.Targets
     }

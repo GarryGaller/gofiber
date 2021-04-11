@@ -4,9 +4,9 @@ import (
     //"fmt"
     //"net/http"
     "time"
-    
+
     "translator/utils"
-    
+
     "github.com/gofiber/fiber/v2"
 )
 
@@ -15,7 +15,25 @@ type Config struct {
     Sleep    int
     Next     func(c *fiber.Ctx) bool
     Response func(c *fiber.Ctx) error
+    Local    bool
 }
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
+}
+
 
 var ResponseAtOnceConnClose = func(c *fiber.Ctx) error {
     return c.Context().Conn().Close()
@@ -31,21 +49,11 @@ var ResponseWithSleepConnClose = func(c *fiber.Ctx) error {
     return nil
 }
 
-var Next = func(c *fiber.Ctx) bool { return false }
-
 var ConfigDefault = Config{
     IPs:      make([]string, 0),
     Sleep:    0,
     Next:     Next,
     Response: ResponseAtOnceConnClose,
-}
-
-func GetIPs(c *fiber.Ctx) []string {
-    ips := c.IPs()
-    if len(ips) == 0 {
-        ips = append(ips, c.IP())
-    }
-    return ips
 }
 
 func configDefault(config ...Config) Config {
@@ -61,15 +69,19 @@ func configDefault(config ...Config) Config {
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
     }
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
+    } 
 
     if cfg.Sleep == 0 {
         cfg.Sleep = ConfigDefault.Sleep
-    } 
-    
-    if cfg.Sleep > 0 {
-        cfg.Response = ResponseWithSleepConnClose 
     }
-    
+
+    if cfg.Sleep > 0 {
+        cfg.Response = ResponseWithSleepConnClose
+    }
+
     if cfg.Response == nil {
         cfg.Response = ConfigDefault.Response
     }
@@ -90,7 +102,7 @@ func New(config ...Config) fiber.Handler {
         if cfg.Sleep > 0 {
             c.Locals("sleep", cfg.Sleep)
         }
-         
+
         if len(cfg.IPs) != 0 && len(GetIPs(c)) != 0 {
             ip := GetIPs(c)[0]
             if utils.ContainsString(cfg.IPs, ip) {

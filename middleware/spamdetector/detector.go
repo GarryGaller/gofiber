@@ -25,9 +25,24 @@ type Config struct {
     Targets  []string
     Next     func(c *fiber.Ctx) bool
     Response func(c *fiber.Ctx) error
+    Local     bool
 }
 
-func Next(c *fiber.Ctx) bool { return false }
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
+}
 
 func Response(c *fiber.Ctx) error {
     message := c.Locals("message").(string)
@@ -59,9 +74,13 @@ func configDefault(config ...Config) Config {
     if cfg.MaxLen == 0 {
         cfg.MaxLen = ConfigDefault.MaxLen
     }
-    
+
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
 
     if cfg.Response == nil {
@@ -88,39 +107,39 @@ func New(config ...Config) fiber.Handler {
         for _, target := range cfg.Targets {
             value := c.Locals(target).(string)
             runesCount := utf8.RuneCountInString(value)
-            if cfg.MaxLen !=-1 && runesCount > cfg.MaxLen{
+            if cfg.MaxLen != -1 && runesCount > cfg.MaxLen {
                 value = string([]rune(value)[:cfg.MaxLen])
             }
-            
+
             nonLettersCount := len(NONLETTERS.FindAllString(value, -1))
             // the string consists only of these chars
-            if (runesCount == nonLettersCount) {
+            if runesCount == nonLettersCount {
                 message := "Looks too much like spam: lots of non-letter characters"
                 c.Locals("message", message)
                 return cfg.Response(c)
             }
-            
+
             chars := sort.StringSlice(LATIN_OR_CYRILLIC.FindAllString(value, -1))
             chars.Sort()
             countUniq := set.Uniq(chars)
-            
+
             //latin := LATIN.FindAllString(value, -1)
             //chars := sort.StringSlice(latin)
             //chars.Sort()
             //latinCount := set.Uniq(chars)
-            
+
             //cyrillic := CYRILLIC.FindAllString(value, -1)
             //chars = sort.StringSlice(cyrillic)
             //chars.Sort()
             //cyrillicCount := set.Uniq(chars)
-            
+
             //if (runesCount > 1 && (latinCount == 1 || cyrillicCount == 1)){
-            if (runesCount > 1 && countUniq == 1) {
+            if runesCount > 1 && countUniq == 1 {
                 message := "Looks too much like spam: lots of the same ones characters"
                 c.Locals("message", message)
                 return cfg.Response(c)
-            } 
-            
+            }
+
             //if (level := LetterVariety(value); level < cfg.LD) {
             //    message = fmt.Sprintf("Looks too much like spam %.1f", level)
             //    c.Locals("message", message)

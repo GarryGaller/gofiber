@@ -8,10 +8,27 @@ import (
 )
 
 type Config struct {
-    Limit    uint64
-    Next     func(c *fiber.Ctx) bool
+    Limit        uint64
+    Next         func(c *fiber.Ctx) bool
     LimitReached func(c *fiber.Ctx, limit, value uint64) bool
-    Response func(c *fiber.Ctx, limit uint64, value uint64) error
+    Response     func(c *fiber.Ctx, limit uint64, value uint64) error
+    Local        bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 var Response = func(c *fiber.Ctx, limit, size uint64) error {
@@ -22,18 +39,15 @@ var Response = func(c *fiber.Ctx, limit, size uint64) error {
     })
 }
 
-var Next = func(c *fiber.Ctx) bool { return false } // return c.IP() == "127.0.0.1" }
-
 func LimitReached(c *fiber.Ctx, limit, value uint64) bool {
     return limit > 0 && value > limit
 }
 
-
 var ConfigDefault = Config{
-    Limit:    0,
-    Next:     Next,
+    Limit:        0,
+    Next:         Next,
     LimitReached: LimitReached,
-    Response: Response,
+    Response:     Response,
 }
 
 func configDefault(config ...Config) Config {
@@ -48,8 +62,12 @@ func configDefault(config ...Config) Config {
     // Set default values
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
-    }
+    }    
     
+    if cfg.Local {
+        cfg.Next = NextIfLocal
+    } 
+
     if cfg.LimitReached == nil {
         cfg.LimitReached = ConfigDefault.LimitReached
     }

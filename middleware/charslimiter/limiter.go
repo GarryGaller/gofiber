@@ -2,24 +2,39 @@ package charslimiter
 
 import (
     //"fmt"
+    "encoding/binary"
     "fmt"
     "net/http"
-    "encoding/binary"
-    
+
     "github.com/coocood/freecache"
     "github.com/gofiber/fiber/v2"
-    
 )
 
-
 type Config struct {
-    Cache         *freecache.Cache
-    Limit         uint64
-    Expiration    int
-    Next          func(c *fiber.Ctx) bool
-    LimitReached  func(c *fiber.Ctx, limit, value uint64) bool
-    Response      func(c *fiber.Ctx, limit, chars uint64) error
-    KeyGenerator  func(c *fiber.Ctx) string
+    Cache        *freecache.Cache
+    Limit        uint64
+    Expiration   int
+    Next         func(c *fiber.Ctx) bool
+    LimitReached func(c *fiber.Ctx, limit, value uint64) bool
+    Response     func(c *fiber.Ctx, limit, chars uint64) error
+    KeyGenerator func(c *fiber.Ctx) string
+    Local        bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 func KeyGenFromIP(c *fiber.Ctx) string {
@@ -38,16 +53,6 @@ var Response = func(c *fiber.Ctx, limit, chars uint64) error {
     })
 }
 
-func GetIPs(c *fiber.Ctx) []string {
-    ips := c.IPs()
-    if len(ips) == 0 {
-        ips = append(ips, c.IP())
-    }
-    return ips
-}
-
-var Next = func(c *fiber.Ctx) bool { return false } //return c.IP() == "127.0.0.1" }
-
 func LimitReached(c *fiber.Ctx, limit, value uint64) bool {
     return limit > 0 && value > limit
 }
@@ -55,7 +60,7 @@ func LimitReached(c *fiber.Ctx, limit, value uint64) bool {
 var ConfigDefault = Config{
     Cache:        freecache.NewCache(5 * 1024 * 1024), // 5 mb
     Limit:        0,
-    Expiration:   3600,  // 1 hour
+    Expiration:   3600, // 1 hour
     Next:         Next,
     LimitReached: LimitReached,
     Response:     Response,
@@ -75,10 +80,13 @@ func configDefault(config ...Config) Config {
     if cfg.Cache == nil {
         cfg.Cache = ConfigDefault.Cache
     }
-    
-    
+
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
 
     if cfg.LimitReached == nil {
@@ -99,7 +107,7 @@ func configDefault(config ...Config) Config {
 
     return cfg
 }
- 
+
 func CacheIncrUint(cache *freecache.Cache, key []byte, incr uint64) error {
     var err error
     buffer := make([]byte, 8)
@@ -112,19 +120,18 @@ func CacheIncrUint(cache *freecache.Cache, key []byte, incr uint64) error {
     return err
 }
 
-func BytesFromUint(value uint64) ([]byte) {
+func BytesFromUint(value uint64) []byte {
     buffer := make([]byte, 8)
     binary.LittleEndian.PutUint64(buffer, value)
     return buffer
 }
-
 
 // New creates a new middleware handler
 func New(config ...Config) fiber.Handler {
     cfg := configDefault(config...)
     // Return new handler
     return func(c *fiber.Ctx) error {
-        
+
         var value uint64
         var err error
         var exists bool
@@ -157,7 +164,7 @@ func New(config ...Config) fiber.Handler {
             // key found
             CacheIncrUint(cfg.Cache, ip, uint64(chars))
         }
-        
+
         // finish response
         return nil
     }

@@ -9,16 +9,15 @@ import (
 )
 
 type Config struct {
-    IPs []string
-    Max int
-    Expiration time.Duration
+    IPs          []string
+    Max          int
+    Expiration   time.Duration
     KeyGenerator func(c *fiber.Ctx) string
-    Next func(c *fiber.Ctx) bool
-    LimitReached func(c *fiber.Ctx) error 
-    Storage fiber.Storage
+    Next         func(c *fiber.Ctx) bool
+    LimitReached func(c *fiber.Ctx) error
+    Storage      fiber.Storage
+    Local        bool
 }
-
-var Next = func(c *fiber.Ctx) bool { return false }
 
 func GetIPs(c *fiber.Ctx) []string {
     ips := c.IPs()
@@ -26,6 +25,14 @@ func GetIPs(c *fiber.Ctx) []string {
         ips = append(ips, c.IP())
     }
     return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 func configDefault(config ...Config) (limiter.Config, []string) {
@@ -56,7 +63,11 @@ func configDefault(config ...Config) (limiter.Config, []string) {
     if config[0].Next != nil {
         cfg.Next = config[0].Next
     }
-
+    
+    if config[0].Local {
+        cfg.Next = NextIfLocal
+    }  
+    
     if config[0].Storage != nil {
         cfg.Storage = config[0].Storage
     }
@@ -68,7 +79,7 @@ func configDefault(config ...Config) (limiter.Config, []string) {
 func New(config ...Config) fiber.Handler {
 
     cfg, ips := configDefault(config...)
-    
+
     // Return new handler
     handler := limiter.New(cfg)
     return func(c *fiber.Ctx) error {

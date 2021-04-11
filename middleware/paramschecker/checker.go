@@ -2,15 +2,32 @@ package paramschecker
 
 import (
     "fmt"
-    
+
     "github.com/gofiber/fiber/v2"
 )
 
 type Config struct {
-    Targets  map[string]func(p string) bool
-    Next     func(c *fiber.Ctx) bool
-    Response func(c *fiber.Ctx) error
+    Targets   map[string]func(p string) bool
+    Next      func(c *fiber.Ctx) bool
+    Response  func(c *fiber.Ctx) error
     ReadLimit int
+    Local     bool
+}
+
+func GetIPs(c *fiber.Ctx) []string {
+    ips := c.IPs()
+    if len(ips) == 0 {
+        ips = append(ips, c.IP())
+    }
+    return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 var Response = func(c *fiber.Ctx) error {
@@ -24,16 +41,14 @@ var Response = func(c *fiber.Ctx) error {
     })
 }
 
-func Next(c *fiber.Ctx) bool { return false }
-
 func NotEmpty(p string) bool { return p != "" }
 
-func MoreOne(p string) bool { return len(p) > 1} 
- 
+func MoreOne(p string) bool { return len(p) > 1 }
+
 var ConfigDefault = Config{
-    Targets:  make(map[string]func(p string) bool),
-    Next:     Next,
-    Response: Response,
+    Targets:   make(map[string]func(p string) bool),
+    Next:      Next,
+    Response:  Response,
     ReadLimit: 1024,
 }
 
@@ -50,9 +65,13 @@ func configDefault(config ...Config) Config {
     if cfg.ReadLimit == 0 {
         cfg.ReadLimit = ConfigDefault.ReadLimit
     }
-    
+
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
 
     if cfg.Targets == nil {
@@ -84,7 +103,7 @@ func New(config ...Config) fiber.Handler {
             if len(data) > cfg.ReadLimit {
                 data = data[:cfg.ReadLimit]
             }
-            
+
             if !checker(data) {
                 c.Locals("target", target)
                 return cfg.Response(c)

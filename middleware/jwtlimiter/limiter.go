@@ -10,13 +10,14 @@ import (
     "time"
 
     "translator/gormutils"
-    "translator/models"
     "translator/jwtutils"
-    
+    "translator/models"
+
     "github.com/dgraph-io/ristretto"
     "github.com/form3tech-oss/jwt-go"
     "github.com/gofiber/fiber/v2"
     jwtware "github.com/gofiber/jwt/v2"
+    "github.com/sirupsen/logrus"
     "gorm.io/gorm"
 )
 
@@ -30,22 +31,32 @@ type Item struct {
 }
 
 type Config struct {
-    Limit         uint64
-    Next          func(c *fiber.Ctx) bool
-    LimitReached  func(c *fiber.Ctx, limit, chars uint64) error
-    Fail          func(c *fiber.Ctx, err error) error
-    Cost          int64
-    CacheSize     int64
-    TTL           time.Duration
-    JWT           jwtware.Config
-    DB            *gormutils.DataBase
+    Limit        uint64
+    Next         func(c *fiber.Ctx) bool
+    LimitReached func(c *fiber.Ctx, limit, chars uint64) error
+    Fail         func(c *fiber.Ctx, err error) error
+    Cost         int64
+    CacheSize    int64
+    TTL          time.Duration
+    JWT          jwtware.Config
+    DB           *gormutils.DataBase
+    Local        bool
+    logger       *logrus.Logger
+}
+
+func (cfg *Config) SetLogger(logger *logrus.Logger) {
+    cfg.logger = logger
+}
+
+func (cfg *Config) Log() *logrus.Logger {
+    return cfg.logger
 }
 
 func NewCache(cfg *Config) *ristretto.Cache {
     cache, err := ristretto.NewCache(&ristretto.Config{
         NumCounters: cfg.CacheSize * 10, // number of keys to track frequency of.
-        MaxCost:     cfg.CacheSize,      // maximum cost of cache 
-        BufferItems: 64,            // number of keys per Get buffer.
+        MaxCost:     cfg.CacheSize,      // maximum cost of cache
+        BufferItems: 64,                 // number of keys per Get buffer.
         //OnExit:      OnExit,    //
         OnEvict: func(item *ristretto.Item) {
             // OnEvict is called for every eviction and passes the hashed key, value,
@@ -89,9 +100,9 @@ func NewCache(cfg *Config) *ristretto.Cache {
 }
 
 var ConfigDefault = Config{
-    CacheSize:    10000,    // 0.1Mb
+    CacheSize:    10000, // 0.1Mb
     Cost:         400,
-    TTL:          0,      // бессрочно
+    TTL:          0, // бессрочно
     Next:         Next,
     LimitReached: LimitReached,
     Fail:         Fail,
@@ -99,7 +110,8 @@ var ConfigDefault = Config{
         ContextKey:    "user",
         SigningMethod: "HS256",
     },
-    DB: nil,
+    DB:     nil,
+    logger: logrus.New(),
 }
 
 func GetIPs(c *fiber.Ctx) []string {
@@ -108,6 +120,14 @@ func GetIPs(c *fiber.Ctx) []string {
         ips = append(ips, c.IP())
     }
     return ips
+}
+
+func NextIfLocal(c *fiber.Ctx) bool {
+    return GetIPs(c)[0] == "127.0.0.1"
+}
+
+func Next(c *fiber.Ctx) bool {
+    return false
 }
 
 func GetLimitFromToken(c *fiber.Ctx) uint64 {
@@ -139,9 +159,7 @@ func GetTokenFromHeader(c *fiber.Ctx) string {
     return token
 }
 
-func Next(c *fiber.Ctx) bool { return false }
-//func Cost(value interface{}) int64 { return 400 } 
-
+//func Cost(value interface{}) int64 { return 400 }
 
 func LimitReached(c *fiber.Ctx, limit, chars uint64) error {
     return c.Status(402).JSON(fiber.Map{
@@ -180,6 +198,9 @@ func configDefault(config ...Config) Config {
 
     // Override default config
     cfg := config[0]
+    if cfg.logger == nil {
+        cfg.logger = ConfigDefault.logger
+    }
 
     if cfg.CacheSize == 0 {
         cfg.CacheSize = ConfigDefault.CacheSize
@@ -199,6 +220,10 @@ func configDefault(config ...Config) Config {
 
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
+    }    
+    
+    if cfg.Local {
+        cfg.Next = NextIfLocal
     }
 
     if cfg.LimitReached == nil {
@@ -252,7 +277,7 @@ func configDefault(config ...Config) Config {
 func New(config ...Config) fiber.Handler {
     cfg := configDefault(config...)
     cache := NewCache(&cfg)
-
+    
     // do not validate
     cfg.JWT.Filter = func(c *fiber.Ctx) bool {
         // проверить наличие токена  в кэше
@@ -263,9 +288,10 @@ func New(config ...Config) fiber.Handler {
     }
     // if validation failed
     cfg.JWT.ErrorHandler = func(c *fiber.Ctx, err error) error {
+        //log := c.Context().Logger().(*logrus.Logger)
         
         token := GetTokenFromHeader(c)
-        
+
         if err.Error() == "Token is expired" {
             if cfg.DB != nil {
                 user := models.New()
@@ -275,8 +301,11 @@ func New(config ...Config) fiber.Handler {
                     Updates(user)
                     //Delete(user)
                 if result.RowsAffected == 0 {
-                    fmt.Printf("The entry was not updated: %s|%#v\n",
+                    log, ok := c.Locals("logger").(*logrus.Logger)
+                    if ok {
+                        log.Errorf("[JWT:GORM ] The entry was not updated: %s|%#v\n",
                         token, result.Error)
+                    }
                 }
             }
         }
@@ -294,7 +323,7 @@ func New(config ...Config) fiber.Handler {
 
     // на успешную авторизацию добавляем токен в кэш
     cfg.JWT.SuccessHandler = func(c *fiber.Ctx) error {
-        
+
         token := GetTokenFromHeader(c)
         expires := c.Locals("expires").(time.Time)
         limit := c.Locals("max").(uint64)
@@ -311,7 +340,7 @@ func New(config ...Config) fiber.Handler {
 
         // устанавливаем в кэше значение
         current := uint64(c.Locals("chars").(int))
-        
+
         item := Item{
             Token:       token,
             Chars:       translated,
@@ -337,6 +366,7 @@ func New(config ...Config) fiber.Handler {
     handler := jwtware.New(cfg.JWT)
 
     return func(c *fiber.Ctx) error {
+        c.Locals("logger", cfg.Log())
         if cfg.Next != nil && cfg.Next(c) {
             return c.Next()
         }
@@ -348,13 +378,13 @@ func New(config ...Config) fiber.Handler {
         // если в кэше
         if ok {
             item := val.(Item)
-            translated := item.Chars  // число символов из БД
+            translated := item.Chars // число символов из БД
             limit := item.Limit
             expires := item.ExpiresAt
             cacheTime := item.CacheTime
             // проверяем достигнут ли лимит
             translated += item.CachedChars
-            
+
             if limit > 0 && translated > limit {
                 return cfg.LimitReached(c, limit, translated)
             }
@@ -367,9 +397,11 @@ func New(config ...Config) fiber.Handler {
             // обновляем в кэше значение
             current := uint64(c.Locals("chars").(int))
             item.CachedChars += current
-            remainTime := cacheTime - time.Now().Unix() 
-            
-            if remainTime <= 0 {remainTime = 1}
+            remainTime := cacheTime - time.Now().Unix()
+
+            if remainTime <= 0 {
+                remainTime = 1
+            }
             ttl := time.Duration(remainTime) * time.Second
             //fmt.Printf("remainTime:%s\n", ttl)
             _ = cache.SetWithTTL(token, item, cfg.Cost, ttl)
@@ -413,7 +445,7 @@ func New(config ...Config) fiber.Handler {
 
                 claims, err := jwtutils.ExtractClaims(
                     token, cfg.JWT.SigningKey.([]byte))
-                
+
                 if err != nil {
                     return cfg.Fail(c, err)
                 }
@@ -428,7 +460,7 @@ func New(config ...Config) fiber.Handler {
                 }
                 expires = time.Unix(exp, 0)
 
-                if  max, ok := claims["Max"]; ok {
+                if max, ok := claims["Max"]; ok {
                     switch v := max.(type) {
                     case float64:
                         limit = uint64(v)
@@ -438,7 +470,7 @@ func New(config ...Config) fiber.Handler {
                     case string:
                         limit, _ = strconv.ParseUint(v, 0, 64)
                     default:
-                        limit = 0    
+                        limit = 0
                     }
                 }
             }
