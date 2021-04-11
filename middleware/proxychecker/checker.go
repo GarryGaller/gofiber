@@ -9,6 +9,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const MESSAGE = "Proxy usage detected: your real IP address does not match the IP address of the request."
+
 var PROXY_HEADERS = []string{
 	"HTTP-X-FORWARDED-FOR",
 	"HTTP-FORWARDED-FOR",
@@ -38,14 +40,13 @@ type Config struct {
 	Local          bool
 	logger         *logrus.Logger
 }
-  
+
 func (cfg *Config) SetLogger(logger *logrus.Logger) {
-    cfg.logger = logger
+	cfg.logger = logger
 }
 
-
-func (cfg *Config) Log() *logrus.Logger{
-    return cfg.logger
+func (cfg *Config) Log() *logrus.Logger {
+	return cfg.logger
 }
 
 func GetIPs(c *fiber.Ctx) []string {
@@ -68,20 +69,20 @@ func IsProxyHeaders(c *fiber.Ctx, proxyHeaders []string) bool {
 	//ip := GetIPs(c)[0]
 	findHeaders := make([]string, 0)
 	//log := c.Context().Logger().(*logrus.Logger)
-    log, ok := c.Locals("logger").(*logrus.Logger)
+	log, ok := c.Locals("logger").(*logrus.Logger)
 	if ok {
-        log.Infof(
-            "[ADDR     ] ID:[#%016X] - Local:[%s] <-> Remote:[%s]\n",
-            c.Context().ID(),
-            c.Context().LocalAddr(),
-            c.Context().RemoteAddr(),
-        )
-        log.Infof("[ADDR     ] RemoteIP:[%s-%s] <-> XForwardedFor:[%s]\n",
-            c.IP(),
-            c.Context().RemoteIP().String(),
-            strings.Join(c.IPs(), ", "),
-        )
-    }
+		log.Infof(
+			"[ADDR     ] ID:[#%016X] - Local:[%s] <-> Remote:[%s]\n",
+			c.Context().ID(),
+			c.Context().LocalAddr(),
+			c.Context().RemoteAddr(),
+		)
+		log.Infof("[ADDR     ] RemoteIP:[%s-%s] <-> XForwardedFor:[%s]\n",
+			c.IP(),
+			c.Context().RemoteIP().String(),
+			strings.Join(c.IPs(), ", "),
+		)
+	}
 	if len(proxyHeaders) != 0 {
 		for _, header := range proxyHeaders {
 			value := c.Get(header)
@@ -92,31 +93,31 @@ func IsProxyHeaders(c *fiber.Ctx, proxyHeaders []string) bool {
 		}
 	}
 	if len(findHeaders) > 0 {
-		if ok{
-            log.Infof("[HEADERS  ] %s\n", strings.Join(findHeaders, ", "))
-        }
-        return true
-    }
+		if ok {
+			log.Infof("[HEADERS  ] %s\n", strings.Join(findHeaders, ", "))
+		}
+		return true
+	}
 
 	return false
 }
 
 func IsProxyIP(c *fiber.Ctx) bool {
 	var ip1, ip2, ips string
-    ip1 = c.Get("X-Real-IP") 
-    ips = c.Get("Forwarded-For-IP")
-    ipList := strings.Split(ips,",")
-    
-    if len(ipList) > 0 { 
-        ip2 = strings.TrimSpace(ipList[0])
-    } 
-    return ip1 != "" && ip2 != "" && ip2 != ip2
+	ip1 = c.Get("X-Real-IP")
+	ips = c.Get("Forwarded-For-IP")
+	ipList := strings.Split(ips, ",")
+
+	if len(ipList) > 0 {
+		ip2 = strings.TrimSpace(ipList[0])
+	}
+	return ip1 != "" && ip2 != "" && ip1 != ip2
 }
 
 var Response = func(c *fiber.Ctx) error {
 	return c.Status(403).JSON(fiber.Map{
 		"status":  fiber.StatusForbidden,
-		"message": "Proxy usage detected: your real IP address does not match the IP address of the request.",
+		"message": MESSAGE,
 	})
 }
 
@@ -147,13 +148,13 @@ func configDefault(config ...Config) Config {
 		cfg.Headers = ConfigDefault.Headers
 	}
 
-    if cfg.Next == nil {
-        cfg.Next = ConfigDefault.Next
-    }    
-    
-    if cfg.Local {
-        cfg.Next = NextIfLocal
-    }
+	if cfg.Next == nil {
+		cfg.Next = ConfigDefault.Next
+	}
+
+	if cfg.Local {
+		cfg.Next = NextIfLocal
+	}
 
 	if cfg.Response == nil {
 		cfg.Response = ConfigDefault.Response
@@ -176,7 +177,7 @@ func New(config ...Config) fiber.Handler {
 	// Return new handler
 	return func(c *fiber.Ctx) error {
 		// Don't execute middleware if Next returns true
-        c.Locals("logger", cfg.Log())
+		c.Locals("logger", cfg.Log())
 		if cfg.Next != nil && cfg.Next(c) {
 			return c.Next()
 		}
