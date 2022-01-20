@@ -2,7 +2,7 @@ package iplimiter
 
 import (
     "time"
-    "translator/utils"
+    "translator/utils/util"
 
     "github.com/gofiber/fiber/v2"
     "github.com/gofiber/fiber/v2/middleware/limiter"
@@ -28,7 +28,7 @@ func GetIPs(c *fiber.Ctx) []string {
 }
 
 func NextIfLocal(c *fiber.Ctx) bool {
-    return GetIPs(c)[0] == "127.0.0.1"
+    return c.IsFromLocal()
 }
 
 func Next(c *fiber.Ctx) bool {
@@ -88,7 +88,7 @@ func New(config ...Config) fiber.Handler {
         }
         if len(ips) != 0 && len(GetIPs(c)) != 0 {
             ip := GetIPs(c)[0]
-            if utils.ContainsString(ips, ip) {
+            if util.ContainsString(ips, ip) {
                 return handler(c)
             }
         }

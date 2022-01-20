@@ -24,7 +24,7 @@ func GetIPs(c *fiber.Ctx) []string {
 }
 
 func NextIfLocal(c *fiber.Ctx) bool {
-    return GetIPs(c)[0] == "127.0.0.1"
+    return c.IsFromLocal()
 }
 
 func Next(c *fiber.Ctx) bool {
@@ -34,7 +34,7 @@ func Next(c *fiber.Ctx) bool {
 var Response = func(c *fiber.Ctx) error {
     return c.Status(400).JSON(fiber.Map{
         "status":  fiber.StatusBadRequest,
-        "message": fmt.Sprintf("%s is not html", c.Locals("target")),
+        "message": fmt.Sprintf("Invalid the <%s> parameter: does not contain html tags", c.Locals("target")),
     })
 }
 

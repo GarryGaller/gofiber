@@ -23,7 +23,7 @@ func GetIPs(c *fiber.Ctx) []string {
 }
 
 func NextIfLocal(c *fiber.Ctx) bool {
-    return GetIPs(c)[0] == "127.0.0.1"
+    return c.IsFromLocal()
 }
 
 func Next(c *fiber.Ctx) bool {

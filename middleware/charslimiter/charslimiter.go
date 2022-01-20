@@ -1,22 +1,24 @@
 package charslimiter
 
 import (
-    //"fmt"
-    "encoding/binary"
+    "errors"
     "fmt"
     "net/http"
-
-    "github.com/coocood/freecache"
+    "time"
+    
     "github.com/gofiber/fiber/v2"
 )
 
+var ErrDatabaseNotInitialized = errors.New("database is not initialized")
+
+
 type Config struct {
-    Cache        *freecache.Cache
+    Cache        *Cache
     Limit        uint64
     Expiration   int
     Next         func(c *fiber.Ctx) bool
     LimitReached func(c *fiber.Ctx, limit, value uint64) bool
-    Response     func(c *fiber.Ctx, limit, chars uint64) error
+    Response     func(c *fiber.Ctx, limit, chars uint64, period time.Duration) error
     KeyGenerator func(c *fiber.Ctx) string
     Local        bool
 }
@@ -30,7 +32,7 @@ func GetIPs(c *fiber.Ctx) []string {
 }
 
 func NextIfLocal(c *fiber.Ctx) bool {
-    return GetIPs(c)[0] == "127.0.0.1"
+    return c.IsFromLocal()
 }
 
 func Next(c *fiber.Ctx) bool {
@@ -44,11 +46,11 @@ func KeyGenFromIP(c *fiber.Ctx) string {
     return c.IP()
 }
 
-var Response = func(c *fiber.Ctx, limit, chars uint64) error {
+var Response = func(c *fiber.Ctx, limit, chars uint64, period time.Duration) error {
     return c.Status(402).JSON(fiber.Map{
         "status": fiber.StatusPaymentRequired,
-        "message": fmt.Sprintf("%s:%d chars more %d maxchars per hour",
-            http.StatusText(402), chars, limit,
+        "message": fmt.Sprintf("%s:%d chars more %d maxchars for the period in %s",
+            http.StatusText(402), chars, limit, period,
         ),
     })
 }
@@ -58,8 +60,7 @@ func LimitReached(c *fiber.Ctx, limit, value uint64) bool {
 }
 
 var ConfigDefault = Config{
-    Cache:        freecache.NewCache(5 * 1024 * 1024), // 5 mb
-    Limit:        0,
+    Limit:        0,    // chars limit
     Expiration:   3600, // 1 hour
     Next:         Next,
     LimitReached: LimitReached,
@@ -83,8 +84,8 @@ func configDefault(config ...Config) Config {
 
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
-    }    
-    
+    }
+
     if cfg.Local {
         cfg.Next = NextIfLocal
     }
@@ -105,49 +106,35 @@ func configDefault(config ...Config) Config {
         cfg.Response = ConfigDefault.Response
     }
 
+    if cfg.Cache == nil {
+        cfg.Cache = NewCache(DefaultCacheConfig)
+    }
+
     return cfg
-}
-
-func CacheIncrUint(cache *freecache.Cache, key []byte, incr uint64) error {
-    var err error
-    buffer := make([]byte, 8)
-    got, _, _ := cache.GetWithExpiration(key)
-    ttl, _ := cache.TTL(key)
-    value := binary.LittleEndian.Uint64(got)
-    value += incr
-    binary.LittleEndian.PutUint64(buffer, value)
-    err = cache.Set(key, buffer, int(ttl))
-    return err
-}
-
-func BytesFromUint(value uint64) []byte {
-    buffer := make([]byte, 8)
-    binary.LittleEndian.PutUint64(buffer, value)
-    return buffer
 }
 
 // New creates a new middleware handler
 func New(config ...Config) fiber.Handler {
     cfg := configDefault(config...)
+
     // Return new handler
     return func(c *fiber.Ctx) error {
 
-        var value uint64
+        var value interface{}
         var err error
         var exists bool
-        // Don't cache response if Next returns true
+        // Don't limit response if Next returns true
         if cfg.Next != nil && cfg.Next(c) {
             return c.Next()
         }
-
         //-------------------------------------
-        ip := []byte(cfg.KeyGenerator(c))
-        bValue, _, err := cfg.Cache.GetWithExpiration(ip)
-        exists = err == nil
+        ip := cfg.KeyGenerator(c)
+        value, exists = cfg.Cache.Get(ip)
         if exists {
-            value = binary.LittleEndian.Uint64(bValue)
-            if cfg.LimitReached(c, cfg.Limit, value) {
-                return cfg.Response(c, cfg.Limit, value)
+            if cfg.LimitReached(c, cfg.Limit, value.(uint64)) {
+                return cfg.Response(c, cfg.Limit, value.(uint64),
+                    time.Duration(cfg.Expiration)*time.Second,
+                )
             }
         }
         // Continue stack, return err to Fiber if exist
@@ -158,11 +145,14 @@ func New(config ...Config) fiber.Handler {
         chars := c.Locals("chars").(int)
         if !exists {
             // key not found
-            buffer := BytesFromUint(uint64(chars))
-            cfg.Cache.Set(ip, buffer, cfg.Expiration)
+            expires := time.Duration(cfg.Expiration) * time.Second
+            cfg.Cache.Set(ip, uint64(chars), expires)
         } else {
-            // key found
-            CacheIncrUint(cfg.Cache, ip, uint64(chars))
+            // if key found
+            _, err = cfg.Cache.IncrementUint64(ip, uint64(chars))
+            if err != nil {
+                return err
+            }
         }
 
         // finish response

@@ -1,21 +1,18 @@
-package blacklist
+package bodylimiter
 
 import (
-    //"fmt"
-    //"net/http"
-    "time"
-
-    "translator/utils"
+    "fmt"
+    "net/http"
 
     "github.com/gofiber/fiber/v2"
 )
 
 type Config struct {
-    IPs      []string
-    Sleep    int
-    Next     func(c *fiber.Ctx) bool
-    Response func(c *fiber.Ctx) error
-    Local    bool
+    Limit        uint64
+    Next         func(c *fiber.Ctx) bool
+    LimitReached func(c *fiber.Ctx, limit, value uint64) bool
+    Response     func(c *fiber.Ctx, limit uint64, value uint64) error
+    Local        bool
 }
 
 func GetIPs(c *fiber.Ctx) []string {
@@ -27,33 +24,30 @@ func GetIPs(c *fiber.Ctx) []string {
 }
 
 func NextIfLocal(c *fiber.Ctx) bool {
-    return GetIPs(c)[0] == "127.0.0.1"
+    return c.IsFromLocal()
 }
 
 func Next(c *fiber.Ctx) bool {
     return false
 }
 
-
-var ResponseAtOnceConnClose = func(c *fiber.Ctx) error {
-    return c.Context().Conn().Close()
+var Response = func(c *fiber.Ctx, limit, size uint64) error {
+    return c.Status(413).JSON(fiber.Map{
+        "status": fiber.StatusRequestEntityTooLarge,
+        "message": fmt.Sprintf("%s:%d byte > %d byte",
+            http.StatusText(413), size, limit),
+    })
 }
 
-var ResponseWithSleepConnClose = func(c *fiber.Ctx) error {
-    sleep, ok := c.Locals("sleep").(time.Duration)
-    if ok {
-        c.Request().Reset()
-        c.Request().ResetBody()
-        time.Sleep(sleep * time.Second)
-    }
-    return nil
+func LimitReached(c *fiber.Ctx, limit, value uint64) bool {
+    return limit > 0 && value > limit
 }
 
 var ConfigDefault = Config{
-    IPs:      make([]string, 0),
-    Sleep:    0,
-    Next:     Next,
-    Response: ResponseAtOnceConnClose,
+    Limit:        0,
+    Next:         Next,
+    LimitReached: LimitReached,
+    Response:     Response,
 }
 
 func configDefault(config ...Config) Config {
@@ -68,18 +62,18 @@ func configDefault(config ...Config) Config {
     // Set default values
     if cfg.Next == nil {
         cfg.Next = ConfigDefault.Next
-    }
+    }    
     
     if cfg.Local {
         cfg.Next = NextIfLocal
     } 
 
-    if cfg.Sleep == 0 {
-        cfg.Sleep = ConfigDefault.Sleep
+    if cfg.LimitReached == nil {
+        cfg.LimitReached = ConfigDefault.LimitReached
     }
 
-    if cfg.Sleep > 0 {
-        cfg.Response = ResponseWithSleepConnClose
+    if cfg.Limit == 0 {
+        cfg.Limit = ConfigDefault.Limit
     }
 
     if cfg.Response == nil {
@@ -98,17 +92,11 @@ func New(config ...Config) fiber.Handler {
         if cfg.Next != nil && cfg.Next(c) {
             return c.Next()
         }
-
-        if cfg.Sleep > 0 {
-            c.Locals("sleep", cfg.Sleep)
+        size := uint64(len(c.Body()))
+        if cfg.LimitReached(c, cfg.Limit, size) {
+            return cfg.Response(c, cfg.Limit, size)
         }
 
-        if len(cfg.IPs) != 0 && len(GetIPs(c)) != 0 {
-            ip := GetIPs(c)[0]
-            if utils.ContainsString(cfg.IPs, ip) {
-                return cfg.Response(c)
-            }
-        }
         return c.Next()
     }
 }
